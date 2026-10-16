@@ -61,6 +61,20 @@ class GameEngine:
         self.perfect_bonus_cap = 10     # cap on bonus from a single drop
         self.width_restore = 10         # pixels regained per perfect after the first in a streak
 
+        # Atmospheric sky: (tower height, color) keyframes, blended smoothly in between
+        self.sky_keyframes = [
+            (0,  (24, 27, 36)),    # ground level (original background)
+            (6,  (38, 70, 120)),   # pre-dawn
+            (14, (60, 125, 195)),  # daytime sky
+            (22, (170, 95, 115)),  # sunset
+            (30, (80, 55, 120)),   # dusk
+            (38, (30, 25, 70)),    # night
+            (50, (6, 6, 20)),      # space
+        ]
+        self.sky_lookahead = 8     # the top of the screen shows the sky this many blocks higher
+        self.stars = [(random.randint(0, width), random.randint(0, height), random.choice([1, 1, 2]))
+                      for _ in range(60)]
+
         self.font_title = pygame.font.SysFont(None, 38)
         self.font_hud = pygame.font.SysFont(None, 28)
         self.font_big = pygame.font.SysFont(None, 46)
@@ -85,6 +99,7 @@ class GameEngine:
         self.perfect_timer = 0
         self.perfect_text_bonus = 0
         self.debris = []
+        self.sky_height = 0.0   # smoothed tower height that drives the background
 
         base_x = (self.width - self.base_width) // 2
         base_y = self.height - 60
@@ -92,6 +107,36 @@ class GameEngine:
         self.stack = [base_block]
 
         self.spawn_active_block()
+
+    def get_sky_color(self, h):
+        """Interpolate the sky color for a given (fractional) tower height."""
+        keys = self.sky_keyframes
+        if h <= keys[0][0]:
+            return keys[0][1]
+        for (h0, c0), (h1, c1) in zip(keys, keys[1:]):
+            if h <= h1:
+                t = (h - h0) / (h1 - h0)
+                return tuple(int(a + (b - a) * t) for a, b in zip(c0, c1))
+        return keys[-1][1]
+
+    def draw_background(self, screen):
+        top = self.get_sky_color(self.sky_height + self.sky_lookahead)
+        bottom = self.get_sky_color(self.sky_height)
+
+        # Build a thin vertical gradient strip and stretch it across the screen
+        steps = 64
+        strip = pygame.Surface((1, steps))
+        for i in range(steps):
+            t = i / (steps - 1)
+            strip.set_at((0, i), tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
+        screen.blit(pygame.transform.smoothscale(strip, (self.width, self.height)), (0, 0))
+
+        # Stars fade in as the tower reaches space
+        star_alpha = max(0.0, min(1.0, (self.sky_height - 34) / 14))
+        if star_alpha > 0:
+            level = int(255 * star_alpha)
+            for x, y, r in self.stars:
+                pygame.draw.circle(screen, (level, level, level), (x, y), r)
 
     def spawn_active_block(self):
         top_block = self.stack[-1]
@@ -171,7 +216,7 @@ class GameEngine:
 
     def handle_event(self, event):
         if self.game_over:
-            if (event.type == pygame.KEYDOWN and event.key == pygame.K_r) or \
+            if (event.type == pygame.KEYDOWN and event.key in (pygame.K_r, pygame.K_SPACE)) or \
                (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1):
                 self.reset()
             return
@@ -187,12 +232,15 @@ class GameEngine:
             if self.perfect_timer > 0:
                 self.perfect_timer -= 1
 
+        target_height = len(self.stack) - 1
+        self.sky_height += (target_height - self.sky_height) * 0.04
+
         for d in self.debris:
             d.update()
         self.debris = [d for d in self.debris if not d.is_offscreen(self.height)]
 
     def render(self, screen):
-        screen.fill((24, 27, 36))
+        self.draw_background(screen)
 
         title_surf = self.font_title.render("Skyscraper Stack", True, (245, 245, 245))
         screen.blit(title_surf, (self.width // 2 - title_surf.get_width() // 2, 16))
