@@ -58,7 +58,7 @@ class GameEngine:
         right = min(act.x + act.width, top_block.x + top_block.width)
         overlap = right - left
         
-        is_successful_drop = overlap <= 0
+        is_successful_drop = overlap > 0
         
         if is_successful_drop:
             trimmed_width = max(10.0, overlap)
