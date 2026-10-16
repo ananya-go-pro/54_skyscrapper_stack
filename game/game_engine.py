@@ -10,6 +10,12 @@ class GameEngine:
         self.block_height = 28
         self.base_width = 180
 
+        # Perfect placement tuning
+        self.perfect_tolerance = 6      # max pixel offset that still counts as perfect
+        self.perfect_bonus = 2          # bonus points per perfect (multiplied by streak)
+        self.perfect_bonus_cap = 10     # cap on bonus from a single drop
+        self.width_restore = 10         # pixels regained per perfect after the first in a streak
+
         self.font_title = pygame.font.SysFont(None, 38)
         self.font_hud = pygame.font.SysFont(None, 28)
         self.font_big = pygame.font.SysFont(None, 46)
@@ -30,6 +36,9 @@ class GameEngine:
     def reset(self):
         self.score = 0
         self.game_over = False
+        self.perfect_streak = 0
+        self.perfect_timer = 0
+        self.perfect_text_bonus = 0
 
         base_x = (self.width - self.base_width) // 2
         base_y = self.height - 60
@@ -61,10 +70,34 @@ class GameEngine:
         is_successful_drop = overlap > 0
         
         if is_successful_drop:
-            trimmed_width = max(10.0, overlap)
-            new_block = Block(left, act.y, trimmed_width, self.block_height, act.color, speed=0)
+            is_perfect = abs(act.x - top_block.x) <= self.perfect_tolerance
+
+            if is_perfect:
+                # Snap flush with the tower below: no trimming
+                self.perfect_streak += 1
+                new_width = top_block.width
+                new_x = top_block.x
+
+                # From the 2nd consecutive perfect on, regain some lost width
+                if self.perfect_streak >= 2 and new_width < self.base_width:
+                    restored = min(self.width_restore, self.base_width - new_width)
+                    new_width += restored
+                    new_x -= restored / 2
+                    # Keep the block inside the same bounds the blocks oscillate in
+                    new_x = max(20.0, min(new_x, self.width - 20 - new_width))
+
+                bonus = min(self.perfect_bonus * self.perfect_streak, self.perfect_bonus_cap)
+                self.score += 1 + bonus
+                self.perfect_timer = 60
+                self.perfect_text_bonus = bonus
+                new_block = Block(new_x, act.y, new_width, self.block_height, act.color, speed=0)
+            else:
+                self.perfect_streak = 0
+                trimmed_width = max(10.0, overlap)
+                new_block = Block(left, act.y, trimmed_width, self.block_height, act.color, speed=0)
+                self.score += 1
+
             self.stack.append(new_block)
-            self.score += 1
 
             if new_block.y < 180:
                 shift_amount = self.block_height + 4
@@ -90,6 +123,8 @@ class GameEngine:
     def update(self):
         if not self.game_over:
             self.active_block.update(self.width)
+            if self.perfect_timer > 0:
+                self.perfect_timer -= 1
 
     def render(self, screen):
         screen.fill((24, 27, 36))
@@ -105,6 +140,19 @@ class GameEngine:
 
         if not self.game_over:
             self.active_block.render(screen)
+
+        if self.perfect_timer > 0 and not self.game_over:
+            alpha = min(255, self.perfect_timer * 8)
+            text = "PERFECT!"
+            if self.perfect_streak > 1:
+                text += f"  x{self.perfect_streak}"
+            perfect_surf = self.font_big.render(text, True, (120, 255, 170))
+            perfect_surf.set_alpha(alpha)
+            screen.blit(perfect_surf, (self.width // 2 - perfect_surf.get_width() // 2, 88))
+
+            bonus_surf = self.font_hud.render(f"+{self.perfect_text_bonus} bonus", True, (255, 220, 80))
+            bonus_surf.set_alpha(alpha)
+            screen.blit(bonus_surf, (self.width // 2 - bonus_surf.get_width() // 2, 122))
 
         if self.game_over:
             overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
