@@ -3,6 +3,51 @@ import pygame
 from game.block import Block
 
 
+class Debris:
+    """A sliced-off piece of a block that tumbles and falls away."""
+    GRAVITY = 0.55
+    MAX_FALL_SPEED = 18.0
+
+    def __init__(self, x, y, width, height, color, side):
+        # x, y = top-left of the piece; stored as a center point for rotation
+        self.width = max(1, int(width))
+        self.height = max(1, int(height))
+        self.cx = x + width / 2
+        self.cy = y + height / 2
+        self.color = color
+
+        # Drift away from the tower (side: -1 = left overhang, +1 = right overhang)
+        self.vx = side * random.uniform(0.6, 1.8)
+        self.vy = random.uniform(-1.5, 0.0)
+
+        # Tip outward: a right-side piece rotates clockwise, a left-side piece counter-clockwise
+        self.angle = 0.0
+        self.spin = -side * random.uniform(1.5, 4.5)
+
+        self.surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        rect = self.surface.get_rect()
+        pygame.draw.rect(self.surface, color, rect, border_radius=4)
+        pygame.draw.rect(self.surface, (245, 245, 250), rect,
+                         width=max(1, min(2, self.width // 2, self.height // 2)), border_radius=4)
+
+    def update(self):
+        self.vy = min(self.MAX_FALL_SPEED, self.vy + self.GRAVITY)
+        self.cx += self.vx
+        self.cy += self.vy
+        self.angle += self.spin
+
+    def y_shift(self, amount):
+        self.cy += amount
+
+    def is_offscreen(self, screen_height):
+        # Generous margin so a rotated piece is fully gone before it is removed
+        return self.cy - max(self.width, self.height) > screen_height
+
+    def render(self, surface):
+        rotated = pygame.transform.rotate(self.surface, self.angle)
+        surface.blit(rotated, rotated.get_rect(center=(int(self.cx), int(self.cy))))
+
+
 class GameEngine:
     def __init__(self, width, height):
         self.width = width
@@ -39,6 +84,7 @@ class GameEngine:
         self.perfect_streak = 0
         self.perfect_timer = 0
         self.perfect_text_bonus = 0
+        self.debris = []
 
         base_x = (self.width - self.base_width) // 2
         base_y = self.height - 60
@@ -55,6 +101,18 @@ class GameEngine:
 
         start_x = 25 if random.choice([True, False]) else self.width - 25 - top_block.width
         self.active_block = Block(start_x, next_y, top_block.width, self.block_height, color, speed=speed)
+
+    def spawn_debris(self, act, left, right):
+        """Create falling pieces for any part of the active block hanging outside the overlap."""
+        # Overhang on the left
+        left_w = left - act.x
+        if left_w >= 1:
+            self.debris.append(Debris(act.x, act.y, left_w, self.block_height, act.color, side=-1))
+        # Overhang on the right
+        act_right = act.x + act.width
+        right_w = act_right - right
+        if right_w >= 1:
+            self.debris.append(Debris(right, act.y, right_w, self.block_height, act.color, side=1))
 
     def drop_block(self):
         if self.game_over:
@@ -93,6 +151,7 @@ class GameEngine:
                 new_block = Block(new_x, act.y, new_width, self.block_height, act.color, speed=0)
             else:
                 self.perfect_streak = 0
+                self.spawn_debris(act, left, right)
                 trimmed_width = max(10.0, overlap)
                 new_block = Block(left, act.y, trimmed_width, self.block_height, act.color, speed=0)
                 self.score += 1
@@ -103,6 +162,8 @@ class GameEngine:
                 shift_amount = self.block_height + 4
                 for b in self.stack:
                     b.y += shift_amount
+                for d in self.debris:
+                    d.y_shift(shift_amount)
 
             self.spawn_active_block()
         else:
@@ -126,6 +187,10 @@ class GameEngine:
             if self.perfect_timer > 0:
                 self.perfect_timer -= 1
 
+        for d in self.debris:
+            d.update()
+        self.debris = [d for d in self.debris if not d.is_offscreen(self.height)]
+
     def render(self, screen):
         screen.fill((24, 27, 36))
 
@@ -137,6 +202,9 @@ class GameEngine:
 
         for b in self.stack:
             b.render(screen)
+
+        for d in self.debris:
+            d.render(screen)
 
         if not self.game_over:
             self.active_block.render(screen)
